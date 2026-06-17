@@ -18,9 +18,9 @@ log_event() {
 
 # ── Prerequisite Check ──────────────────────────────────────────────
 check_prerequisites() {
-  echo "=============================================="
-  echo " Prerequisite Check"
-  echo "=============================================="
+ echo "=============================================="
+echo "                CHECK PREREQUISITES"
+echo "=============================================="
   local missing=0
 
   if command -v podman &>/dev/null; then
@@ -273,10 +273,11 @@ scale() {
     echo "Scale-in completed"
 
   # ── Usage ──────────────────────────────────────────────
-  echo "=============================================="
+  
+  else
+echo "=============================================="
   echo "                USAGE"
   echo "=============================================="
-  else
     echo "Usage:"
     echo "  ./redis-tool scale --add-nodes 2"
     echo "  ./redis-tool scale --remove-node <node-id>"
@@ -332,9 +333,7 @@ verify() {
 
 # ── Main ─────────────────────────────────────────────────────────────
 check_prerequisites
-echo "=============================================="
-echo "                CHECK PREREQISITES"
-echo "=============================================="
+
 case "$1" in
   provision) shift; provision "$@" ;;
   data)      shift; data "$@" ;;
