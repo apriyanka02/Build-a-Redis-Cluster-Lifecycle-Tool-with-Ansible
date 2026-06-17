@@ -28,13 +28,13 @@ pip install --upgrade ansible
 ## Quick Start
 
 ### Step 1 — Generate the SSH keypair and build the containers
-
+```bash
 chmod +x redis-tool setup.sh
-
+```
 
 # Docker
+```bash
 cd infra
-
 docker compose -f compose.yml build
 docker compose -f compose.yml up -d
 
