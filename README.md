@@ -76,7 +76,7 @@ docker ps | grep redis-node
 ### Step 2 — Run the tool
 
 ```bash
-cd submission
+cd submission or cd ..
 ./redis-tool provision --version 7.0.15 --masters 3 --replicas-per-master 1
 ./redis-tool status
 ./redis-tool data seed --keys 1000
