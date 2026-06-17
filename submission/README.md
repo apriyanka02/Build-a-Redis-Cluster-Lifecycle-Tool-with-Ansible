@@ -2,6 +2,30 @@
 
 A CLI tool that wraps Ansible to provision, operate, and perform a rolling upgrade of a 6-node Redis Cluster (3 masters + 3 replicas) with zero client-visible downtime and verified data integrity.
 
+## Tech Stack
+
+- **Bash** — `redis-tool` CLI entrypoint
+- **Ansible 2.14+** — every playbook, role, and task hand-written, no Galaxy collections
+- **Docker / Podman** — container runtime (auto-detected, either works)
+- **Python 3** — required by Ansible on the control node
+- **SSH (key-based only)** — control-node → container auth, `ssh-keygen` generated
+- **Redis** — compiled from source per node to hit exact patch versions (7.0.15 → 7.2.6)
+
+## Project Flow
+
+```mermaid
+flowchart LR
+    A([build + start\n6 containers]) --> B([provision])
+    B --> C([status])
+    C --> D([data seed])
+    D --> E([data verify])
+    E --> F([upgrade --strategy rolling])
+    F --> G([verify --full])
+
+    F -. "fail-fast on any step\nleaves cluster as-is" .-> ERR([❌ stop])
+    G -. "all checks pass" .-> OK([✅ UPGRADE COMPLETE])
+```
+
 ## Prerequisites
 
 - **Container runtime**: Docker Engine or Podman (either works — the tool auto-detects whichever is on your PATH)
@@ -52,6 +76,7 @@ docker ps | grep redis-node
 ### Step 2 — Run the tool
 
 ```bash
+cd submission
 ./redis-tool provision --version 7.0.15 --masters 3 --replicas-per-master 1
 ./redis-tool status
 ./redis-tool data seed --keys 1000
@@ -59,6 +84,17 @@ docker ps | grep redis-node
 ./redis-tool upgrade --target-version 7.2.6 --strategy rolling
 ./redis-tool verify --full
 ```
+
+### Step 3 — Stretch Goals
+
+```bash
+./redis-tool scale --add-nodes 2
+./redis-tool scale --remove-node <node-id>
+./redis-tool rollback --target-version 7.0.15
+./redis-tool provision --version 7.2.6 --masters 3 --replicas-per-master 1
+```
+
+> For `<node-id>`, see Scale in under Stretch Goals Implemented below for how to retrieve it.
 
 ## Infrastructure
 
@@ -74,6 +110,30 @@ docker ps | grep redis-node
 | redis-node-6 | 10.10.0.16 | 2226             |
 
 All six sit on a static bridge network (`10.10.0.0/24`, defined in `infra/compose.yml`) so the Ansible inventory can use fixed IPs. Auth is SSH key-based only — `PasswordAuthentication no` is set in the image's `sshd_config`. Ansible reaches each node through its host-mapped SSH port (`ansible_host=127.0.0.1`, `ansible_port=222x`); Redis itself binds and gossips on the internal `10.10.0.x` address (`cluster_ip` in the inventory). Those are two separate addressing paths for two separate purposes.
+
+```mermaid
+flowchart LR
+    subgraph HOST["Host machine"]
+        CLI["redis-tool\nBash CLI"]
+        ANS["Ansible\nplaybooks"]
+        CLI -->|drives| ANS
+    end
+
+    subgraph NET["Bridge network  10.10.0.0/24"]
+        subgraph M["Masters"]
+            N1["redis-node-1  10.10.0.11"]
+            N2["redis-node-2  10.10.0.12"]
+            N3["redis-node-3  10.10.0.13"]
+        end
+        subgraph R["Replicas"]
+            N4["redis-node-4  10.10.0.14"]
+            N5["redis-node-5  10.10.0.15"]
+            N6["redis-node-6  10.10.0.16"]
+        end
+    end
+
+    ANS -->|"SSH 127.0.0.1:2221–2226"| NET
+```
 
 ## Project Structure
 
