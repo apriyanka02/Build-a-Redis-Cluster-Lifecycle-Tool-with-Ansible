@@ -1,0 +1,48 @@
+---
+- name: Redis Cluster Status
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Copy status script to node
+      copy:
+        dest: /tmp/cluster_status.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          CLI=/usr/local/bin/redis-cli
+
+          state=$($CLI cluster info | grep cluster_state | cut -d: -f2 | tr -d '[:space:]')
+          echo "Cluster State: $state"
+          echo ""
+          echo "MASTERS"
+          $CLI cluster nodes | grep -v slave | grep master | while IFS= read -r line; do
+            id=$(echo "$line" | awk '{print $1}')
+            ip=$(echo "$line" | awk '{print $2}' | cut -d@ -f1)
+            slots=$(echo "$line" | grep -oE '[0-9]+-[0-9]+' | head -1)
+            host=$(echo "$ip" | cut -d: -f1)
+            port=$(echo "$ip" | cut -d: -f2)
+            keys=$($CLI -h "$host" -p "$port" dbsize 2>/dev/null)
+            mem=$($CLI -h "$host" -p "$port" info memory 2>/dev/null | grep used_memory_human | cut -d: -f2 | tr -d '[:space:]')
+            version=$($CLI -h "$host" -p "$port" info server 2>/dev/null | grep redis_version | cut -d: -f2 | tr -d '[:space:]')
+            echo "  $ip [master] v$version slots: $slots keys: $keys mem: $mem"
+          done
+          echo ""
+          echo "REPLICAS"
+          $CLI cluster nodes | grep slave | while IFS= read -r line; do
+            ip=$(echo "$line" | awk '{print $2}' | cut -d@ -f1)
+            master_id=$(echo "$line" | awk '{print $4}')
+            host=$(echo "$ip" | cut -d: -f1)
+            port=$(echo "$ip" | cut -d: -f2)
+            mem=$($CLI -h "$host" -p "$port" info memory 2>/dev/null | grep used_memory_human | cut -d: -f2 | tr -d '[:space:]')
+            version=$($CLI -h "$host" -p "$port" info server 2>/dev/null | grep redis_version | cut -d: -f2 | tr -d '[:space:]')
+            master_ip=$($CLI cluster nodes | grep "^$master_id" | awk '{print $2}' | cut -d@ -f1)
+            echo "  $ip [replica] v$version replicating: $master_ip mem: $mem"
+          done
+
+    - name: Run status script
+      shell: bash /tmp/cluster_status.sh
+      register: status_output
+
+    - name: Show cluster status
+      debug:
+        msg: "{{ status_output.stdout_lines }}"

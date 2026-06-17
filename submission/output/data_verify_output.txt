@@ -1,0 +1,27 @@
+✓ Docker 29.5.3 found
+✓ Ansible 2.20.1 found
+Proceeding...
+
+Verifying data integrity...
+
+PLAY [Verify data integrity in Redis Cluster] **********************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+
+TASK [Verify all keys] *********************************************************
+changed: [redis-node-1]
+
+TASK [Show verification result] ************************************************
+ok: [redis-node-1] => {
+    "msg": [
+        "PASSED: 1000",
+        "FAILED: 0",
+        "MISSING: 0",
+        "RESULT: PASS — 1000/1000 keys verified"
+    ]
+}
+
+PLAY RECAP *********************************************************************
+redis-node-1               : ok=3    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+

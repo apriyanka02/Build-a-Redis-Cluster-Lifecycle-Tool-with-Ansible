@@ -1,0 +1,42 @@
+✓ Docker 29.5.3 found
+✓ Ansible 2.20.1 found
+Proceeding...
+
+Running full verification...
+
+PLAY [Full cluster verification] ***********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+
+TASK [Check 1 - Data integrity] ************************************************
+changed: [redis-node-1]
+
+TASK [Check 2 - Version consistency] *******************************************
+changed: [redis-node-1]
+
+TASK [Check 3 - Topology health] ***********************************************
+changed: [redis-node-1]
+
+TASK [Check 4 - Cluster state] *************************************************
+changed: [redis-node-1]
+
+TASK [Check 5 - Replication lag] ***********************************************
+changed: [redis-node-1]
+
+TASK [Show full verification results] ******************************************
+ok: [redis-node-1] => {
+    "msg": [
+        "========== FULL VERIFICATION REPORT ==========",
+        "CHECK 1 - Data Integrity: PASS (1000/1000 keys verified)",
+        "CHECK 2 - Version Consistency: PASS (all nodes on v7.2.6)",
+        "CHECK 3 - Topology Health: PASS (slots=16384 masters=3 replicas=3)",
+        "CHECK 4 - Cluster State: PASS (cluster_state=ok)",
+        "CHECK 5 - Replication Lag: PASS (all replicas master_link_status=up)",
+        "=============================================="
+    ]
+}
+
+PLAY RECAP *********************************************************************
+redis-node-1               : ok=7    changed=5    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+

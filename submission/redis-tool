@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ANSIBLE_DIR="$SCRIPT_DIR/ansible"
+LOGS_DIR="$SCRIPT_DIR/logs"
+mkdir -p "$LOGS_DIR"
+chmod 600 "$SCRIPT_DIR/infra/redis_cluster_key" 2>/dev/null || true
+chmod +x "$SCRIPT_DIR/redis-tool" 2>/dev/null || true
+
+log_event() {
+  local cmd="$1"
+  local status="$2"
+  local msg="$3"
+  local logfile="$LOGS_DIR/${cmd}_$(date +%Y%m%d).log"
+  printf '{"timestamp":"%s","command":"%s","status":"%s","message":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$cmd" "$status" "$msg" >> "$logfile"
+}
+
+# ── Prerequisite Check ──────────────────────────────────────────────
+check_prerequisites() {
+  echo "=============================================="
+  echo " Prerequisite Check"
+  echo "=============================================="
+  local missing=0
+
+  if command -v podman &>/dev/null; then
+    echo "✓ Podman $(podman --version | awk '{print $3}') found"
+    CONTAINER_CMD="podman"
+  elif command -v docker &>/dev/null; then
+    echo "✓ Docker $(docker --version | awk '{print $3}' | tr -d ',') found"
+    CONTAINER_CMD="docker"
+  else
+    echo "✗ Container runtime not found (Docker or Podman)"
+    echo "  Install Podman: https://podman.io/docs/installation"
+    echo "  Install Docker: https://docs.docker.com/engine/install/"
+    missing=1
+  fi
+
+  if command -v ansible-playbook &>/dev/null; then
+    ANSIBLE_VER=$(ansible --version | head -1 | grep -oP "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+    ANSIBLE_MAJOR=$(echo "$ANSIBLE_VER" | cut -d. -f1)
+    ANSIBLE_MINOR=$(echo "$ANSIBLE_VER" | cut -d. -f2)
+    if [ "$ANSIBLE_MAJOR" -gt 2 ] || { [ "$ANSIBLE_MAJOR" -eq 2 ] && [ "$ANSIBLE_MINOR" -ge 14 ]; }; then
+      echo "✓ Ansible $ANSIBLE_VER found"
+    else
+      echo "✗ Ansible $ANSIBLE_VER found, but version 2.14+ is required"
+      echo "  Install: pip install --upgrade ansible"
+      missing=1
+    fi
+  else
+    echo "✗ Ansible not found"
+    echo "  Install: pip install ansible"
+    missing=1
+  fi
+
+  if [ $missing -ne 0 ]; then
+    echo ""
+    echo "Please install the missing dependencies and retry."
+    exit 1
+  fi
+
+  echo "Proceeding..."
+  echo ""
+}
+
+# ── Provision ────────────────────────────────────────────────────────
+provision() {
+  echo "=============================================="
+  echo "                 PROVISION"
+  echo "=============================================="
+  local version="7.0.15"
+  local masters=3
+  local replicas=1
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --version) version="$2"; shift 2 ;;
+      --masters) masters="$2"; shift 2 ;;
+      --replicas-per-master) replicas="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  log_event "provision" "started" "Provisioning Redis $version cluster $masters masters $replicas replicas"
+  echo "Provisioning Redis $version cluster ($masters masters, $replicas replica each)..."
+  cd "$ANSIBLE_DIR"
+  ansible-playbook -i inventory/hosts.ini \
+    playbooks/provision.yml \
+    --extra-vars "redis_version=$version"
+}
+
+# ── Data ─────────────────────────────────────────────────────────────
+data() {
+  echo "=============================================="
+  echo "                 DATA SEEDING"
+  echo "=============================================="
+  case "$1" in
+    seed)
+      shift
+      local keys=1000
+      while [[ $# -gt 0 ]]; do
+        case $1 in
+          --keys) keys="$2"; shift 2 ;;
+          *) shift ;;
+        esac
+      done
+      log_event "data_seed" "started" "Seeding $keys keys"
+      echo "Seeding $keys keys into cluster..."
+      cd "$ANSIBLE_DIR"
+      ansible-playbook -i inventory/hosts.ini \
+        playbooks/data_seed.yml \
+        --extra-vars "num_keys=$keys"
+      ;;
+    verify)
+      log_event "data_verify" "started" "Verifying data integrity"
+      echo "Verifying data integrity..."
+      cd "$ANSIBLE_DIR"
+      ansible-playbook -i inventory/hosts.ini \
+        playbooks/data_verify.yml
+      ;;
+    *)
+      echo "Usage:"
+      echo "  ./redis-tool data seed --keys 1000"
+      echo "  ./redis-tool data verify"
+      ;;
+  esac
+}
+
+# ── Status ───────────────────────────────────────────────────────────
+status() {
+  echo "=============================================="
+  echo "                 STATUS CHECK"
+  echo "=============================================="
+  log_event "status" "started" "Fetching cluster status"
+  echo "Fetching cluster status..."
+  cd "$ANSIBLE_DIR"
+  ansible-playbook -i inventory/hosts.ini \
+    playbooks/status.yml
+}
+
+# ── Upgrade ──────────────────────────────────────────────────────────
+upgrade() {
+  echo "=============================================="
+  echo "                 ROLLING UPGRADE"
+  echo "=============================================="
+  local target_version=""
+  local upgrade_strategy="rolling"
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --target-version) target_version="$2"; shift 2 ;;
+      --strategy) upgrade_strategy="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  if [ -z "$target_version" ]; then
+    echo "Error: --target-version is required"
+    exit 1
+  fi
+
+  cd "$ANSIBLE_DIR"
+
+  echo "Checking current cluster version..."
+  current_version=$(ansible redis-node-1 -i inventory/hosts.ini -m shell \
+    -a "redis-cli -h 10.10.0.11 -p 6379 info server | grep redis_version | cut -d: -f2 | tr -d '[:space:]'" \
+    -b 2>/dev/null | tail -1)
+
+  if [ "$current_version" = "$target_version" ]; then
+    echo "Cluster is already running Redis $target_version — nothing to do."
+    echo "UPGRADE SKIPPED — all nodes already on v$target_version"
+    exit 0
+  fi
+
+  echo "Current version: $current_version, Target version: $target_version"
+  log_event "upgrade" "started" "Upgrading to $target_version"
+  echo "Starting rolling upgrade to Redis $target_version (strategy: $upgrade_strategy)..."
+  ansible-playbook -i inventory/hosts.ini \
+    playbooks/upgrade.yml \
+    --extra-vars "target_version=$target_version"
+}
+
+# ── Scale ────────────────────────────────────────────────────────────
+scale() {
+  local add_nodes=""
+  local remove_node=""
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --add-nodes)
+        add_nodes="$2"
+        shift 2
+        ;;
+      --remove-node)
+        remove_node="$2"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  # ── Scale Out ──────────────────────────────────────────
+  echo "=============================================="
+  echo "                SCALE OUT"
+  echo "=============================================="
+  if [ -n "$add_nodes" ]; then
+    echo "Scaling out — adding $add_nodes node pair(s)..."
+
+    echo "Starting new container redis-node-7..."
+    $CONTAINER_CMD run -d \
+      --name redis-node-7 \
+      --hostname redis-node-7 \
+      --network infra_redis-net \
+      --ip 10.10.0.17 \
+      -p 2227:22 \
+      redis-cluster-node:latest
+
+    echo "Starting new container redis-node-8..."
+    $CONTAINER_CMD run -d \
+      --name redis-node-8 \
+      --hostname redis-node-8 \
+      --network infra_redis-net \
+      --ip 10.10.0.18 \
+      -p 2228:22 \
+      redis-cluster-node:latest
+
+    echo "Waiting for SSH to be ready..."
+    sleep 8
+
+    cd "$ANSIBLE_DIR"
+
+    ansible-playbook -i inventory/hosts.ini \
+      playbooks/scale_out.yml \
+      --extra-vars \
+      "new_master=redis-node-7 \
+       new_master_ip=10.10.0.17 \
+       new_replica=redis-node-8 \
+       new_replica_ip=10.10.0.18"
+
+  # ── Scale In ───────────────────────────────────────────
+  echo "=============================================="
+  echo "                SCALE IN"
+  echo "=============================================="
+  elif [ -n "$remove_node" ]; then
+
+    echo "Scaling in — removing node $remove_node..."
+
+    cd "$ANSIBLE_DIR"
+
+    REPLICA_ID=$($CONTAINER_CMD exec redis-node-1 redis-cli \
+      -h 10.10.0.11 -p 6379 cluster nodes | \
+      awk -v master="$remove_node" '$4==master {print $1}')
+
+    echo "Master node : $remove_node"
+    echo "Replica node: $REPLICA_ID"
+
+    ansible-playbook -i inventory/hosts.ini \
+      playbooks/scale_in.yml \
+      --extra-vars "target_node_id=$remove_node"
+
+    if [ -n "$REPLICA_ID" ]; then
+      echo "Removing replica from cluster..."
+      $CONTAINER_CMD exec redis-node-1 redis-cli \
+        --cluster del-node \
+        10.10.0.11:6379 \
+        "$REPLICA_ID"
+    fi
+
+    echo "Removing containers..."
+    $CONTAINER_CMD rm -f redis-node-7 redis-node-8 2>/dev/null || true
+    echo "Scale-in completed"
+
+  # ── Usage ──────────────────────────────────────────────
+  echo "=============================================="
+  echo "                USAGE"
+  echo "=============================================="
+  else
+    echo "Usage:"
+    echo "  ./redis-tool scale --add-nodes 2"
+    echo "  ./redis-tool scale --remove-node <node-id>"
+  fi
+}
+
+# ── Rollback ─────────────────────────────────────────────────────────
+rollback() {
+  echo "=============================================="
+  echo "                ROLLBACK"
+  echo "=============================================="
+  local target_version=""
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --target-version) target_version="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  if [ -z "$target_version" ]; then
+    echo "Error: --target-version is required"
+    echo "Usage: ./redis-tool rollback --target-version 7.0.15"
+    exit 1
+  fi
+
+  log_event "rollback" "started" "Rolling back to $target_version"
+  echo "Rolling back cluster to Redis $target_version..."
+  cd "$ANSIBLE_DIR"
+  ansible-playbook -i inventory/hosts.ini \
+    playbooks/rollback.yml \
+    --extra-vars "target_version=$target_version"
+}
+
+# ── Verify ───────────────────────────────────────────────────────────
+verify() {
+  echo "=============================================="
+  echo "                VERIFY"
+  echo "=============================================="
+  local full=false
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --full) full=true; shift ;;
+      *) shift ;;
+    esac
+  done
+  log_event "verify" "started" "Running full verification"
+  echo "Running full verification..."
+  cd "$ANSIBLE_DIR"
+  ansible-playbook -i inventory/hosts.ini \
+    playbooks/verify.yml
+}
+
+# ── Main ─────────────────────────────────────────────────────────────
+check_prerequisites
+echo "=============================================="
+echo "                CHECK PREREQISITES"
+echo "=============================================="
+case "$1" in
+  provision) shift; provision "$@" ;;
+  data)      shift; data "$@" ;;
+  status)    shift; status ;;
+  upgrade)   shift; upgrade "$@" ;;
+  scale)     shift; scale "$@" ;;
+  rollback)  shift; rollback "$@" ;;
+  verify)    shift; verify "$@" ;;
+  *)
+    echo "Usage:"
+    echo "  ./redis-tool provision --version 7.0.15 --masters 3 --replicas-per-master 1"
+    echo "  ./redis-tool data seed --keys 1000"
+    echo "  ./redis-tool data verify"
+    echo "  ./redis-tool status"
+    echo "  ./redis-tool upgrade --target-version 7.2.6 --strategy rolling"
+    echo "  ./redis-tool scale --add-nodes 2"
+    echo "  ./redis-tool scale --remove-node <node-id>"
+    echo "  ./redis-tool rollback --target-version 7.0.15"
+    echo "  ./redis-tool verify --full"
+    ;;
+esac

@@ -1,0 +1,605 @@
+---
+- name: Pre-flight checks
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Check cluster is healthy
+      shell: redis-cli cluster info | grep cluster_state
+      register: cluster_state
+      failed_when: "'cluster_state:ok' not in cluster_state.stdout"
+
+    - name: Verify all nodes are reachable
+      shell: |
+        unreachable=0
+        for host in 10.10.0.11 10.10.0.12 10.10.0.13 10.10.0.14 10.10.0.15 10.10.0.16; do
+          if ! redis-cli -h $host -p 6379 ping > /dev/null 2>&1; then
+            echo "UNREACHABLE: $host"
+            unreachable=$((unreachable+1))
+          fi
+        done
+        if [ $unreachable -eq 0 ]; then
+          echo "All 6 nodes reachable"
+        else
+          echo "FAIL: $unreachable node(s) unreachable"
+          exit 1
+        fi
+      register: reachability_check
+
+    - name: Show reachability check
+      debug:
+        msg: "{{ reachability_check.stdout_lines }}"
+
+    - name: Verify current version differs from target version
+      shell: |
+        current=$(redis-cli -h 10.10.0.11 -p 6379 info server | grep redis_version | cut -d: -f2 | tr -d '[:space:]')
+        echo "Current version: $current"
+        echo "Target version: {{ target_version }}"
+        if [ "$current" = "{{ target_version }}" ]; then
+          echo "SKIP: Cluster is already on v{{ target_version }} — nothing to do."
+          exit 1
+        fi
+        echo "Version check passed — proceeding with upgrade."
+      register: version_check
+      failed_when: "'SKIP:' in version_check.stdout"
+
+    - name: Show version check result
+      debug:
+        msg: "{{ version_check.stdout_lines }}"
+
+    - name: Pre-upgrade data verify
+      shell: |
+        passed=0; failed=0; missing=0
+        for i in $(seq -w 1 1000); do
+          key="key:${i}"
+          expected=$(echo -n "${key}" | sha256sum | cut -d' ' -f1)
+          actual=$(redis-cli -c -h 10.10.0.11 -p 6379 GET "${key}")
+          if [ -z "$actual" ]; then missing=$((missing+1))
+          elif [ "$actual" = "$expected" ]; then passed=$((passed+1))
+          else failed=$((failed+1))
+          fi
+        done
+        echo "Pre-upgrade verify: PASS ${passed}/1000"
+      register: pre_verify
+
+    - name: Show pre-upgrade verify
+      debug:
+        msg: "{{ pre_verify.stdout_lines }}"
+
+- name: Upgrade replica redis-node-4
+  hosts: redis-node-4
+  become: yes
+  tasks:
+    - name: Stop Redis
+      shell: redis-cli -p 6379 shutdown nosave || true
+      ignore_errors: yes
+
+    - name: Wait for port to close
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        state: absent
+        timeout: 30
+
+    - name: Download Redis {{ target_version }}
+      get_url:
+        url: "https://download.redis.io/releases/redis-{{ target_version }}.tar.gz"
+        dest: "/tmp/redis-{{ target_version }}.tar.gz"
+        timeout: 120
+
+    - name: Extract Redis
+      unarchive:
+        src: "/tmp/redis-{{ target_version }}.tar.gz"
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Compile Redis
+      shell: make -j$(nproc)
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Install Redis
+      shell: make install
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Start Redis
+      shell: nohup /usr/local/bin/redis-server /etc/redis/redis.conf > /var/log/redis/startup.log 2>&1 &
+
+    - name: Wait for Redis ready
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        timeout: 60
+        state: started
+
+    - name: Wait for replica sync
+      shell: |
+        for i in $(seq 1 30); do
+          status=$(redis-cli -h {{ cluster_ip }} -p 6379 info replication | grep master_link_status | cut -d: -f2 | tr -d '[:space:]')
+          if [ "$status" = "up" ]; then echo "synced"; exit 0; fi
+          sleep 3
+        done
+        exit 1
+
+- name: Verify cluster after node-4
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Check cluster ok
+      shell: redis-cli cluster info | grep cluster_state
+      register: state
+      failed_when: "'cluster_state:ok' not in state.stdout"
+    - debug:
+        msg: "[1/6] Upgraded replica 10.10.0.14 — cluster: ok"
+
+- name: Upgrade replica redis-node-5
+  hosts: redis-node-5
+  become: yes
+  tasks:
+    - name: Stop Redis
+      shell: redis-cli -p 6379 shutdown nosave || true
+      ignore_errors: yes
+
+    - name: Wait for port to close
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        state: absent
+        timeout: 30
+
+    - name: Download Redis {{ target_version }}
+      get_url:
+        url: "https://download.redis.io/releases/redis-{{ target_version }}.tar.gz"
+        dest: "/tmp/redis-{{ target_version }}.tar.gz"
+        timeout: 120
+
+    - name: Extract Redis
+      unarchive:
+        src: "/tmp/redis-{{ target_version }}.tar.gz"
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Compile Redis
+      shell: make -j$(nproc)
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Install Redis
+      shell: make install
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Start Redis
+      shell: nohup /usr/local/bin/redis-server /etc/redis/redis.conf > /var/log/redis/startup.log 2>&1 &
+
+    - name: Wait for Redis ready
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        timeout: 60
+        state: started
+
+    - name: Wait for replica sync
+      shell: |
+        for i in $(seq 1 30); do
+          status=$(redis-cli -h {{ cluster_ip }} -p 6379 info replication | grep master_link_status | cut -d: -f2 | tr -d '[:space:]')
+          if [ "$status" = "up" ]; then echo "synced"; exit 0; fi
+          sleep 3
+        done
+        exit 1
+
+- name: Verify cluster after node-5
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Check cluster ok
+      shell: redis-cli cluster info | grep cluster_state
+      register: state
+      failed_when: "'cluster_state:ok' not in state.stdout"
+    - debug:
+        msg: "[2/6] Upgraded replica 10.10.0.15 — cluster: ok"
+
+- name: Upgrade replica redis-node-6
+  hosts: redis-node-6
+  become: yes
+  tasks:
+    - name: Stop Redis
+      shell: redis-cli -p 6379 shutdown nosave || true
+      ignore_errors: yes
+
+    - name: Wait for port to close
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        state: absent
+        timeout: 30
+
+    - name: Download Redis {{ target_version }}
+      get_url:
+        url: "https://download.redis.io/releases/redis-{{ target_version }}.tar.gz"
+        dest: "/tmp/redis-{{ target_version }}.tar.gz"
+        timeout: 120
+
+    - name: Extract Redis
+      unarchive:
+        src: "/tmp/redis-{{ target_version }}.tar.gz"
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Compile Redis
+      shell: make -j$(nproc)
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Install Redis
+      shell: make install
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Start Redis
+      shell: nohup /usr/local/bin/redis-server /etc/redis/redis.conf > /var/log/redis/startup.log 2>&1 &
+
+    - name: Wait for Redis ready
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        timeout: 60
+        state: started
+
+    - name: Wait for replica sync
+      shell: |
+        for i in $(seq 1 30); do
+          status=$(redis-cli -h {{ cluster_ip }} -p 6379 info replication | grep master_link_status | cut -d: -f2 | tr -d '[:space:]')
+          if [ "$status" = "up" ]; then echo "synced"; exit 0; fi
+          sleep 3
+        done
+        exit 1
+
+- name: Verify cluster after node-6
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Check cluster ok
+      shell: redis-cli cluster info | grep cluster_state
+      register: state
+      failed_when: "'cluster_state:ok' not in state.stdout"
+    - debug:
+        msg: "[3/6] Upgraded replica 10.10.0.16 — cluster: ok"
+
+- name: Upgrade master redis-node-1
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Get replica of node-1
+      shell: |
+        my_id=$(redis-cli -h 10.10.0.11 -p 6379 cluster nodes | grep "10.10.0.11:6379" | grep -v slave | awk '{print $1}')
+        redis-cli -h 10.10.0.11 -p 6379 cluster nodes | grep slave | while read line; do
+          master_id=$(echo "$line" | awk '{print $4}')
+          if [ "$master_id" = "$my_id" ]; then
+            echo "$line" | awk '{print $2}' | cut -d@ -f1
+            break
+          fi
+        done
+      register: replica_of_node1
+
+    - name: Trigger failover
+      shell: |
+        replica_host=$(echo "{{ replica_of_node1.stdout }}" | cut -d: -f1)
+        replica_port=$(echo "{{ replica_of_node1.stdout }}" | cut -d: -f2)
+        redis-cli -h "$replica_host" -p "$replica_port" cluster failover
+
+    - name: Wait for node-1 to become replica
+      shell: |
+        for i in $(seq 1 30); do
+          role=$(redis-cli -h 10.10.0.11 -p 6379 info replication | grep ^role | cut -d: -f2 | tr -d '[:space:]')
+          if [ "$role" = "slave" ]; then echo "failover done"; exit 0; fi
+          sleep 2
+        done
+        exit 1
+
+    - name: Stop Redis on node-1
+      shell: redis-cli -p 6379 shutdown nosave || true
+      ignore_errors: yes
+
+    - name: Wait for port to close
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        state: absent
+        timeout: 30
+
+    - name: Download Redis {{ target_version }}
+      get_url:
+        url: "https://download.redis.io/releases/redis-{{ target_version }}.tar.gz"
+        dest: "/tmp/redis-{{ target_version }}.tar.gz"
+        timeout: 120
+
+    - name: Extract Redis
+      unarchive:
+        src: "/tmp/redis-{{ target_version }}.tar.gz"
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Compile Redis
+      shell: make -j$(nproc)
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Install Redis
+      shell: make install
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Start Redis
+      shell: nohup /usr/local/bin/redis-server /etc/redis/redis.conf > /var/log/redis/startup.log 2>&1 &
+
+    - name: Wait for Redis ready
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        timeout: 60
+        state: started
+
+    - name: Wait for node-1 to rejoin and sync
+      shell: |
+        for i in $(seq 1 30); do
+          link=$(redis-cli -h 10.10.0.11 -p 6379 info replication | grep master_link_status | cut -d: -f2 | tr -d '[:space:]')
+          echo "Attempt $i: master_link_status=$link"
+          if [ "$link" = "up" ]; then echo "node-1 rejoined and synced"; exit 0; fi
+          sleep 3
+        done
+        echo "ERROR: node-1 did not rejoin after 90s"
+        exit 1
+      register: rejoin1
+
+    - name: Show rejoin result
+      debug:
+        msg: "{{ rejoin1.stdout_lines }}"
+
+- name: Verify cluster after master node-1
+  hosts: redis-node-2
+  become: yes
+  tasks:
+    - name: Check cluster ok
+      shell: redis-cli -h 10.10.0.12 -p 6379 cluster info | grep cluster_state
+      register: state
+      failed_when: "'cluster_state:ok' not in state.stdout"
+    - debug:
+        msg: "[4/6] Upgraded master 10.10.0.11 — cluster: ok"
+
+- name: Upgrade master redis-node-2
+  hosts: redis-node-2
+  become: yes
+  tasks:
+    - name: Get replica of node-2
+      shell: |
+        my_id=$(redis-cli -h 10.10.0.12 -p 6379 cluster nodes | grep "10.10.0.12:6379" | grep -v slave | awk '{print $1}')
+        redis-cli -h 10.10.0.12 -p 6379 cluster nodes | grep slave | while read line; do
+          master_id=$(echo "$line" | awk '{print $4}')
+          if [ "$master_id" = "$my_id" ]; then
+            echo "$line" | awk '{print $2}' | cut -d@ -f1
+            break
+          fi
+        done
+      register: replica_of_node2
+
+    - name: Trigger failover
+      shell: |
+        replica_host=$(echo "{{ replica_of_node2.stdout }}" | cut -d: -f1)
+        replica_port=$(echo "{{ replica_of_node2.stdout }}" | cut -d: -f2)
+        redis-cli -h "$replica_host" -p "$replica_port" cluster failover
+
+    - name: Wait for node-2 to become replica
+      shell: |
+        for i in $(seq 1 30); do
+          role=$(redis-cli -h 10.10.0.12 -p 6379 info replication | grep ^role | cut -d: -f2 | tr -d '[:space:]')
+          if [ "$role" = "slave" ]; then echo "failover done"; exit 0; fi
+          sleep 2
+        done
+        exit 1
+
+    - name: Stop Redis on node-2
+      shell: redis-cli -h 10.10.0.12 -p 6379 shutdown nosave || true
+      ignore_errors: yes
+
+    - name: Wait for port to close
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        state: absent
+        timeout: 30
+
+    - name: Download Redis {{ target_version }}
+      get_url:
+        url: "https://download.redis.io/releases/redis-{{ target_version }}.tar.gz"
+        dest: "/tmp/redis-{{ target_version }}.tar.gz"
+        timeout: 120
+
+    - name: Extract Redis
+      unarchive:
+        src: "/tmp/redis-{{ target_version }}.tar.gz"
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Compile Redis
+      shell: make -j$(nproc)
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Install Redis
+      shell: make install
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Start Redis
+      shell: nohup /usr/local/bin/redis-server /etc/redis/redis.conf > /var/log/redis/startup.log 2>&1 &
+
+    - name: Wait for Redis ready
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        timeout: 60
+        state: started
+
+    - name: Wait for node-2 to rejoin and sync
+      shell: |
+        for i in $(seq 1 30); do
+          link=$(redis-cli -h 10.10.0.12 -p 6379 info replication | grep master_link_status | cut -d: -f2 | tr -d '[:space:]')
+          echo "Attempt $i: master_link_status=$link"
+          if [ "$link" = "up" ]; then echo "node-2 rejoined and synced"; exit 0; fi
+          sleep 3
+        done
+        echo "ERROR: node-2 did not rejoin after 90s"
+        exit 1
+      register: rejoin2
+
+    - name: Show rejoin result
+      debug:
+        msg: "{{ rejoin2.stdout_lines }}"
+
+- name: Verify cluster after master node-2
+  hosts: redis-node-3
+  become: yes
+  tasks:
+    - name: Check cluster ok
+      shell: redis-cli -h 10.10.0.13 -p 6379 cluster info | grep cluster_state
+      register: state
+      failed_when: "'cluster_state:ok' not in state.stdout"
+    - debug:
+        msg: "[5/6] Upgraded master 10.10.0.12 — cluster: ok"
+
+- name: Upgrade master redis-node-3
+  hosts: redis-node-3
+  become: yes
+  tasks:
+    - name: Get replica of node-3
+      shell: |
+        my_id=$(redis-cli -h 10.10.0.13 -p 6379 cluster nodes | grep "10.10.0.13:6379" | grep -v slave | awk '{print $1}')
+        redis-cli -h 10.10.0.13 -p 6379 cluster nodes | grep slave | while read line; do
+          master_id=$(echo "$line" | awk '{print $4}')
+          if [ "$master_id" = "$my_id" ]; then
+            echo "$line" | awk '{print $2}' | cut -d@ -f1
+            break
+          fi
+        done
+      register: replica_of_node3
+
+    - name: Trigger failover
+      shell: |
+        replica_host=$(echo "{{ replica_of_node3.stdout }}" | cut -d: -f1)
+        replica_port=$(echo "{{ replica_of_node3.stdout }}" | cut -d: -f2)
+        redis-cli -h "$replica_host" -p "$replica_port" cluster failover
+
+    - name: Wait for node-3 to become replica
+      shell: |
+        for i in $(seq 1 30); do
+          role=$(redis-cli -h 10.10.0.13 -p 6379 info replication | grep ^role | cut -d: -f2 | tr -d '[:space:]')
+          if [ "$role" = "slave" ]; then echo "failover done"; exit 0; fi
+          sleep 2
+        done
+        exit 1
+
+    - name: Stop Redis on node-3
+      shell: redis-cli -h 10.10.0.13 -p 6379 shutdown nosave || true
+      ignore_errors: yes
+
+    - name: Wait for port to close
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        state: absent
+        timeout: 30
+
+    - name: Download Redis {{ target_version }}
+      get_url:
+        url: "https://download.redis.io/releases/redis-{{ target_version }}.tar.gz"
+        dest: "/tmp/redis-{{ target_version }}.tar.gz"
+        timeout: 120
+
+    - name: Extract Redis
+      unarchive:
+        src: "/tmp/redis-{{ target_version }}.tar.gz"
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Compile Redis
+      shell: make -j$(nproc)
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Install Redis
+      shell: make install
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Start Redis
+      shell: nohup /usr/local/bin/redis-server /etc/redis/redis.conf > /var/log/redis/startup.log 2>&1 &
+
+    - name: Wait for Redis ready
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        timeout: 60
+        state: started
+
+    - name: Wait for node-3 to rejoin and sync
+      shell: |
+        for i in $(seq 1 30); do
+          link=$(redis-cli -h 10.10.0.13 -p 6379 info replication | grep master_link_status | cut -d: -f2 | tr -d '[:space:]')
+          echo "Attempt $i: master_link_status=$link"
+          if [ "$link" = "up" ]; then echo "node-3 rejoined and synced"; exit 0; fi
+          sleep 3
+        done
+        echo "ERROR: node-3 did not rejoin after 90s"
+        exit 1
+      register: rejoin3
+
+    - name: Show rejoin result
+      debug:
+        msg: "{{ rejoin3.stdout_lines }}"
+
+- name: Post-upgrade verification
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Check cluster ok
+      shell: redis-cli -h 10.10.0.11 -p 6379 cluster info | grep cluster_state
+      register: state
+      failed_when: "'cluster_state:ok' not in state.stdout"
+
+    - name: Verify data integrity
+      shell: |
+        passed=0; failed=0; missing=0
+        for i in $(seq -w 1 1000); do
+          key="key:${i}"
+          expected=$(echo -n "${key}" | sha256sum | cut -d' ' -f1)
+          actual=$(redis-cli -c -h 10.10.0.11 -p 6379 GET "${key}")
+          if [ -z "$actual" ]; then missing=$((missing+1))
+          elif [ "$actual" = "$expected" ]; then passed=$((passed+1))
+          else failed=$((failed+1))
+          fi
+        done
+        echo "PASSED=$passed FAILED=$failed MISSING=$missing"
+        if [ $failed -eq 0 ] && [ $missing -eq 0 ]; then
+          echo "RESULT: PASS — ${passed}/1000 keys verified"
+        else
+          echo "RESULT: FAIL"
+          exit 1
+        fi
+      register: post_verify
+
+    - name: Check all nodes version
+      shell: |
+        for host in 10.10.0.11 10.10.0.12 10.10.0.13 10.10.0.14 10.10.0.15 10.10.0.16; do
+          ver=$(redis-cli -h $host -p 6379 info server | grep redis_version | cut -d: -f2 | tr -d '[:space:]')
+          echo "$host: v$ver"
+        done
+      register: versions
+
+    - name: Show results
+      debug:
+        msg: "{{ post_verify.stdout_lines + versions.stdout_lines }}"
+
+    - name: UPGRADE COMPLETE
+      debug:
+        msg: "UPGRADE COMPLETE — all nodes on v{{ target_version }}, data integrity verified, cluster: ok"

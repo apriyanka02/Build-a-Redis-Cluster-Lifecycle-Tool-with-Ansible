@@ -1,0 +1,206 @@
+✓ Docker 29.5.3 found
+✓ Ansible 2.20.1 found
+Proceeding...
+
+Provisioning Redis 7.0.15 cluster (3 masters, 1 replica each)...
+
+PLAY [Provision Redis on all nodes] ********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+ok: [redis-node-2]
+ok: [redis-node-5]
+ok: [redis-node-4]
+ok: [redis-node-3]
+ok: [redis-node-6]
+
+TASK [redis : Check if Redis is already installed] *****************************
+ok: [redis-node-2]
+ok: [redis-node-4]
+ok: [redis-node-3]
+ok: [redis-node-5]
+ok: [redis-node-1]
+ok: [redis-node-6]
+
+TASK [redis : Download Redis source] *******************************************
+skipping: [redis-node-1]
+skipping: [redis-node-2]
+skipping: [redis-node-3]
+skipping: [redis-node-4]
+skipping: [redis-node-5]
+skipping: [redis-node-6]
+
+TASK [redis : Extract Redis source] ********************************************
+skipping: [redis-node-1]
+skipping: [redis-node-2]
+skipping: [redis-node-3]
+skipping: [redis-node-4]
+skipping: [redis-node-5]
+skipping: [redis-node-6]
+
+TASK [redis : Build Redis from source] *****************************************
+skipping: [redis-node-1]
+skipping: [redis-node-2]
+skipping: [redis-node-3]
+skipping: [redis-node-4]
+skipping: [redis-node-5]
+skipping: [redis-node-6]
+
+TASK [redis : Install Redis binaries] ******************************************
+skipping: [redis-node-1]
+skipping: [redis-node-2]
+skipping: [redis-node-3]
+skipping: [redis-node-4]
+skipping: [redis-node-5]
+skipping: [redis-node-6]
+
+TASK [redis : Create redis directories] ****************************************
+ok: [redis-node-3] => (item=/etc/redis)
+ok: [redis-node-4] => (item=/etc/redis)
+ok: [redis-node-2] => (item=/etc/redis)
+ok: [redis-node-1] => (item=/etc/redis)
+ok: [redis-node-5] => (item=/etc/redis)
+ok: [redis-node-4] => (item=/var/lib/redis)
+ok: [redis-node-3] => (item=/var/lib/redis)
+ok: [redis-node-5] => (item=/var/lib/redis)
+ok: [redis-node-1] => (item=/var/lib/redis)
+ok: [redis-node-2] => (item=/var/lib/redis)
+ok: [redis-node-3] => (item=/var/log/redis)
+ok: [redis-node-2] => (item=/var/log/redis)
+ok: [redis-node-5] => (item=/var/log/redis)
+ok: [redis-node-4] => (item=/var/log/redis)
+ok: [redis-node-1] => (item=/var/log/redis)
+ok: [redis-node-6] => (item=/etc/redis)
+ok: [redis-node-6] => (item=/var/lib/redis)
+ok: [redis-node-6] => (item=/var/log/redis)
+
+TASK [redis : Deploy redis.conf] ***********************************************
+ok: [redis-node-1]
+ok: [redis-node-2]
+ok: [redis-node-3]
+ok: [redis-node-5]
+ok: [redis-node-4]
+ok: [redis-node-6]
+
+TASK [redis : Stop any existing Redis instance] ********************************
+ok: [redis-node-1]
+ok: [redis-node-3]
+ok: [redis-node-2]
+ok: [redis-node-5]
+ok: [redis-node-4]
+ok: [redis-node-6]
+
+TASK [redis : Wait for Redis port to be free] **********************************
+ok: [redis-node-1]
+ok: [redis-node-2]
+ok: [redis-node-5]
+ok: [redis-node-3]
+ok: [redis-node-4]
+ok: [redis-node-6]
+
+TASK [redis : Start Redis server] **********************************************
+changed: [redis-node-2]
+changed: [redis-node-1]
+changed: [redis-node-3]
+changed: [redis-node-5]
+changed: [redis-node-4]
+changed: [redis-node-6]
+
+TASK [redis : Wait for Redis to be ready] **************************************
+ok: [redis-node-1]
+ok: [redis-node-2]
+ok: [redis-node-3]
+ok: [redis-node-4]
+ok: [redis-node-5]
+ok: [redis-node-6]
+
+PLAY [Form Redis Cluster] ******************************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+
+TASK [Wait for all Redis nodes to be ready] ************************************
+ok: [redis-node-1] => (item=10.10.0.11)
+ok: [redis-node-1] => (item=10.10.0.12)
+ok: [redis-node-1] => (item=10.10.0.13)
+ok: [redis-node-1] => (item=10.10.0.14)
+ok: [redis-node-1] => (item=10.10.0.15)
+ok: [redis-node-1] => (item=10.10.0.16)
+
+TASK [Check current cluster state] *********************************************
+ok: [redis-node-1]
+
+TASK [Form Redis cluster] ******************************************************
+skipping: [redis-node-1]
+
+TASK [Print cluster formation result] ******************************************
+skipping: [redis-node-1]
+
+TASK [Show message if cluster already formed] **********************************
+ok: [redis-node-1] => {
+    "msg": "Cluster already formed and healthy — skipping creation."
+}
+
+TASK [Wait for cluster state to become ok] *************************************
+ok: [redis-node-1]
+
+TASK [Show cluster info] *******************************************************
+ok: [redis-node-1] => {
+    "msg": [
+        "cluster_state:ok",
+        "cluster_slots_assigned:16384",
+        "cluster_slots_ok:16384",
+        "cluster_slots_pfail:0",
+        "cluster_slots_fail:0",
+        "cluster_known_nodes:6",
+        "cluster_size:3",
+        "cluster_current_epoch:6",
+        "cluster_my_epoch:1",
+        "cluster_stats_messages_ping_sent:9",
+        "cluster_stats_messages_pong_sent:11",
+        "cluster_stats_messages_sent:20",
+        "cluster_stats_messages_ping_received:11",
+        "cluster_stats_messages_pong_received:9",
+        "cluster_stats_messages_received:20",
+        "total_cluster_links_buffer_limit_exceeded:0"
+    ]
+}
+
+PLAY [Print Final Cluster Topology] ********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+
+TASK [Wait for all replicas to sync] *******************************************
+ok: [redis-node-1]
+
+TASK [Print topology] **********************************************************
+changed: [redis-node-1]
+
+TASK [Show topology] ***********************************************************
+ok: [redis-node-1] => {
+    "msg": [
+        "===== FINAL CLUSTER TOPOLOGY =====",
+        "Cluster State: ok",
+        "",
+        "MASTERS",
+        "  10.10.0.13:6379 [master] v7.0.15 slots: 10923-16383 keys: 343",
+        "  10.10.0.12:6379 [master] v7.0.15 slots: 5461-10922 keys: 324",
+        "  10.10.0.11:6379 [master] v7.0.15 slots: 0-5460 keys: 333",
+        "",
+        "REPLICAS",
+        "  10.10.0.16:6379 [replica] v7.0.15 replicating: 10.10.0.12:6379 link: up",
+        "  10.10.0.14:6379 [replica] v7.0.15 replicating: 10.10.0.13:6379 link: up",
+        "  10.10.0.15:6379 [replica] v7.0.15 replicating: 10.10.0.11:6379 link: up",
+        "=================================="
+    ]
+}
+
+PLAY RECAP *********************************************************************
+redis-node-1               : ok=18   changed=2    unreachable=0    failed=0    skipped=6    rescued=0    ignored=0   
+redis-node-2               : ok=8    changed=1    unreachable=0    failed=0    skipped=4    rescued=0    ignored=0   
+redis-node-3               : ok=8    changed=1    unreachable=0    failed=0    skipped=4    rescued=0    ignored=0   
+redis-node-4               : ok=8    changed=1    unreachable=0    failed=0    skipped=4    rescued=0    ignored=0   
+redis-node-5               : ok=8    changed=1    unreachable=0    failed=0    skipped=4    rescued=0    ignored=0   
+redis-node-6               : ok=8    changed=1    unreachable=0    failed=0    skipped=4    rescued=0    ignored=0   
+

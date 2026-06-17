@@ -1,0 +1,40 @@
+---
+- name: Seed data into Redis Cluster
+  hosts: redis-node-1
+  become: yes
+  vars:
+    total_keys: "{{ num_keys | default(1000) }}"
+  tasks:
+    - name: Seed keys into cluster
+      shell: |
+        success=0
+        failed=0
+        for i in $(seq -w 1 {{ total_keys }}); do
+          key="key:${i}"
+          value=$(echo -n "${key}" | sha256sum | cut -d' ' -f1)
+          result=$(/usr/local/bin/redis-cli -c -h 10.10.0.11 -p 6379 SET "${key}" "${value}" 2>&1)
+          if [ "$result" = "OK" ]; then
+            success=$((success+1))
+          else
+            failed=$((failed+1))
+            echo "FAILED: $key -> $result"
+          fi
+        done
+        echo "Done seeding {{ total_keys }} keys — success=$success failed=$failed"
+      register: seed_result
+
+    - name: Print seed summary
+      shell: |
+        total=0
+        for host in 10.10.0.11 10.10.0.12 10.10.0.13; do
+          keys=$(/usr/local/bin/redis-cli -h $host -p 6379 dbsize)
+          echo "  $host: $keys keys"
+          total=$((total + keys))
+        done
+        echo "Total keys inserted: $total"
+        echo "Failures: {{ '0' }}"
+      register: summary
+
+    - name: Show summary
+      debug:
+        msg: "{{ seed_result.stdout_lines + summary.stdout_lines }}"

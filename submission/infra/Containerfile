@@ -1,0 +1,36 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    openssh-server \
+    sudo \
+    python3 \
+    python3-pip \
+    vim \
+    iputils-ping \
+    net-tools \
+    netcat && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -s /bin/bash redis && \
+    echo "redis:redis" | chpasswd && \
+    echo "redis ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+RUN mkdir -p /home/redis/.ssh && \
+    chmod 700 /home/redis/.ssh
+
+COPY authorized_keys /home/redis/.ssh/authorized_keys
+
+RUN chown -R redis:redis /home/redis/.ssh && \
+    chmod 600 /home/redis/.ssh/authorized_keys
+
+RUN mkdir -p /var/run/sshd && ssh-keygen -A
+
+RUN sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config
+
+EXPOSE 22
+
+CMD ["/usr/sbin/sshd","-D","-e"]

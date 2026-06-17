@@ -1,0 +1,135 @@
+---
+- name: Scale In - Remove node from cluster
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Check cluster is healthy before scale in
+      shell: redis-cli -h 10.10.0.11 -p 6379 cluster info | grep cluster_state
+      register: state
+      failed_when: "'cluster_state:ok' not in state.stdout"
+
+    - name: Get node IP from node ID
+      shell: |
+        redis-cli -h 10.10.0.11 -p 6379 cluster nodes | \
+        grep "^{{ target_node_id }}" | \
+        awk '{print $2}' | cut -d@ -f1
+      register: node_ip
+
+    - name: Show target node
+      debug:
+        msg: "Node IP: {{ node_ip.stdout }}"
+
+    - name: Check whether node is master
+      shell: |
+        redis-cli -h 10.10.0.11 -p 6379 cluster nodes | \
+        grep "^{{ target_node_id }}" | \
+        grep -c master || true
+      register: is_master
+
+    - name: Get destination master
+      shell: |
+        redis-cli -h 10.10.0.11 -p 6379 cluster nodes | \
+        grep master | \
+        grep -v "^{{ target_node_id }}" | \
+        grep -v myself | \
+        head -1 | \
+        awk '{print $1}'
+      register: target_master_id
+      when: is_master.stdout | trim == "1"
+
+    - name: Count exact slots owned by source node
+      shell: |
+        redis-cli -h 10.10.0.11 -p 6379 cluster nodes | \
+        grep "^{{ target_node_id }}" | \
+        awk '{for(i=9;i<=NF;i++) print $i}' | \
+        grep -v '\[' | \
+        awk -F- 'NF==2{sum+=($2-$1+1)} NF==1{sum+=1} END{print sum+0}'
+      register: slot_count
+      when: is_master.stdout | trim == "1"
+
+    - name: Show slot count to migrate
+      debug:
+        msg: "Slots to migrate: {{ slot_count.stdout | trim }}"
+      when: is_master.stdout | trim == "1"
+
+    - name: Move slots from source node
+      shell: |
+        redis-cli --cluster reshard 10.10.0.11:6379 \
+        --cluster-from {{ target_node_id }} \
+        --cluster-to {{ target_master_id.stdout | trim }} \
+        --cluster-slots {{ slot_count.stdout | trim }} \
+        --cluster-yes
+      when: is_master.stdout | trim == "1" and (slot_count.stdout | trim | int) > 0
+      register: reshard_result
+
+    - name: Show migration result
+      debug:
+        msg: "{{ reshard_result.stdout_lines }}"
+      when: is_master.stdout | trim == "1"
+
+    - name: Wait until all slots are fully migrated off source node
+      shell: |
+        for i in $(seq 1 30); do
+          remaining=$(redis-cli -h 10.10.0.11 -p 6379 cluster nodes | \
+            grep "^{{ target_node_id }}" | \
+            awk '{for(i=9;i<=NF;i++) print $i}' | \
+            grep -v '\[' | wc -l)
+          echo "Attempt $i: remaining slot ranges = $remaining"
+          if [ "$remaining" -eq 0 ]; then
+            echo "All slots migrated"
+            exit 0
+          fi
+          sleep 3
+        done
+        echo "ERROR: slots did not fully migrate after 90s"
+        exit 1
+      when: is_master.stdout | trim == "1"
+      register: migrate_wait
+
+    - name: Confirm migration complete
+      debug:
+        msg: "{{ migrate_wait.stdout_lines }}"
+      when: is_master.stdout | trim == "1"
+
+    - name: Find replica attached to master
+      shell: |
+        redis-cli -h 10.10.0.11 -p 6379 cluster nodes | \
+        grep slave | \
+        awk '{print $1, $4}' | \
+        grep "{{ target_node_id }}" | \
+        awk '{print $1}'
+      register: replica_id
+      when: is_master.stdout | trim == "1"
+
+    - name: Remove replica
+      shell: |
+        redis-cli --cluster del-node \
+        10.10.0.11:6379 \
+        {{ replica_id.stdout | trim }}
+      when:
+        - is_master.stdout | trim == "1"
+        - replica_id.stdout | trim != ""
+
+    - name: Wait before removing master
+      pause:
+        seconds: 5
+
+    - name: Remove master
+      shell: |
+        redis-cli --cluster del-node \
+        10.10.0.11:6379 \
+        {{ target_node_id }}
+      register: del_result
+
+    - name: Show deletion result
+      debug:
+        msg: "{{ del_result.stdout_lines }}"
+
+    - name: Verify cluster state
+      shell: redis-cli -h 10.10.0.11 -p 6379 cluster info | grep cluster_state
+      register: final_state
+      failed_when: "'cluster_state:ok' not in final_state.stdout"
+
+    - name: Scale in complete
+      debug:
+        msg: "Scale in successful — master and replica removed"

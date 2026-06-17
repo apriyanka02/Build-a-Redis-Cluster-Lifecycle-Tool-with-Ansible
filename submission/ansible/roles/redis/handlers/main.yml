@@ -1,0 +1,9 @@
+---
+- name: restart redis
+  shell: |
+    pkill -9 -f '^{{ redis_install_dir }}/redis-server' || true
+    sleep 1
+    nohup {{ redis_install_dir }}/redis-server {{ redis_config_dir }}/redis.conf > /dev/null 2>&1 &
+    sleep 1
+  args:
+    executable: /bin/bash

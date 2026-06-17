@@ -1,0 +1,150 @@
+---
+- name: Rollback - Downgrade all nodes to target version
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Check current version
+      shell: |
+        redis-cli -h 10.10.0.11 -p 6379 info server | grep redis_version | cut -d: -f2 | tr -d '[:space:]'
+      register: current_ver
+
+    - name: Show current version
+      debug:
+        msg: "Current version: {{ current_ver.stdout }} — rolling back to {{ target_version }}"
+
+- name: Stop all nodes and install target version
+  hosts: redis_cluster
+  become: yes
+  tasks:
+    - name: Stop Redis
+      shell: redis-cli -h {{ cluster_ip }} -p 6379 shutdown nosave || true
+      ignore_errors: yes
+
+    - name: Wait for port to close
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        state: absent
+        timeout: 30
+
+    - name: Clear all data and cluster state files
+      shell: |
+        rm -rf /var/lib/redis/appendonlydir/
+        rm -f /var/lib/redis/*.rdb
+        rm -f /var/lib/redis/nodes.conf
+        rm -f /etc/redis/nodes.conf
+      ignore_errors: yes
+
+    - name: Download Redis {{ target_version }}
+      get_url:
+        url: "http://download.redis.io/releases/redis-{{ target_version }}.tar.gz"
+        dest: "/tmp/redis-{{ target_version }}.tar.gz"
+        timeout: 120
+
+    - name: Extract Redis
+      unarchive:
+        src: "/tmp/redis-{{ target_version }}.tar.gz"
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Compile Redis
+      shell: make -j$(nproc)
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Install Redis
+      shell: make install
+      args:
+        chdir: "/tmp/redis-{{ target_version }}"
+
+    - name: Start Redis
+      shell: nohup /usr/local/bin/redis-server /etc/redis/redis.conf > /var/log/redis/startup.log 2>&1 &
+
+    - name: Wait for Redis ready
+      wait_for:
+        host: "{{ cluster_ip }}"
+        port: 6379
+        timeout: 60
+        state: started
+
+    - name: Reset cluster state on node
+      shell: redis-cli -h {{ cluster_ip }} -p 6379 cluster reset hard
+      ignore_errors: yes
+
+- name: Reform cluster after rollback
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Wait for all nodes to be ready
+      wait_for:
+        host: "{{ item }}"
+        port: 6379
+        timeout: 30
+      loop:
+        - 10.10.0.11
+        - 10.10.0.12
+        - 10.10.0.13
+        - 10.10.0.14
+        - 10.10.0.15
+        - 10.10.0.16
+
+    - name: Form cluster
+      command: >
+        redis-cli --cluster create
+        10.10.0.11:6379
+        10.10.0.12:6379
+        10.10.0.13:6379
+        10.10.0.14:6379
+        10.10.0.15:6379
+        10.10.0.16:6379
+        --cluster-replicas 1
+        --cluster-yes
+      register: cluster_result
+
+    - name: Show cluster formation result
+      debug:
+        msg: "{{ cluster_result.stdout_lines }}"
+
+    - name: Wait for cluster to fully settle
+      shell: |
+        for i in $(seq 1 20); do
+          state=$(redis-cli -h 10.10.0.11 -p 6379 cluster info | grep cluster_state | cut -d: -f2 | tr -d '[:space:]')
+          echo "Attempt $i: cluster_state=$state"
+          if [ "$state" = "ok" ]; then
+            echo "Cluster is ok"
+            exit 0
+          fi
+          sleep 3
+        done
+        echo "ERROR: cluster did not reach ok state after 60s"
+        exit 1
+      register: settle_wait
+
+    - name: Show settle result
+      debug:
+        msg: "{{ settle_wait.stdout_lines }}"
+
+- name: Post-rollback verification
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Verify cluster state
+      shell: redis-cli -h 10.10.0.11 -p 6379 cluster info | grep cluster_state
+      register: state
+      failed_when: "'cluster_state:ok' not in state.stdout"
+
+    - name: Check all nodes version
+      shell: |
+        for host in 10.10.0.11 10.10.0.12 10.10.0.13 10.10.0.14 10.10.0.15 10.10.0.16; do
+          ver=$(redis-cli -h $host -p 6379 info server | grep redis_version | cut -d: -f2 | tr -d '[:space:]')
+          echo "$host: v$ver"
+        done
+      register: versions
+
+    - name: Show rollback result
+      debug:
+        msg: "{{ versions.stdout_lines }}"
+
+    - name: ROLLBACK COMPLETE
+      debug:
+        msg: "ROLLBACK COMPLETE — all nodes on v{{ target_version }}, cluster: ok"

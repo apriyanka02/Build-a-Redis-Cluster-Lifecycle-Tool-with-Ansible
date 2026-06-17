@@ -1,0 +1,99 @@
+---
+- name: Scale Out - Add new master node
+  hosts: "{{ new_master }}"
+  become: yes
+  vars:
+    redis_version: "7.2.6"
+  roles:
+    - redis
+
+- name: Scale Out - Add new replica node
+  hosts: "{{ new_replica }}"
+  become: yes
+  vars:
+    redis_version: "7.2.6"
+  roles:
+    - redis
+
+- name: Reset new nodes before joining cluster
+  hosts: "{{ new_master }},{{ new_replica }}"
+  become: yes
+  tasks:
+    - name: Flush all data
+      shell: redis-cli -h {{ cluster_ip }} -p 6379 flushall || true
+      ignore_errors: yes
+
+    - name: Reset cluster state
+      shell: redis-cli -h {{ cluster_ip }} -p 6379 cluster reset hard || true
+      ignore_errors: yes
+
+    - name: Wait for reset to complete
+      pause:
+        seconds: 3
+
+- name: Scale Out - Join nodes to cluster and rebalance
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Add new master to cluster
+      shell: |
+        redis-cli --cluster add-node \
+          {{ hostvars[new_master]['cluster_ip'] }}:6379 \
+          10.10.0.11:6379
+      register: add_master
+
+    - name: Show add master result
+      debug:
+        msg: "{{ add_master.stdout_lines }}"
+
+    - name: Wait for new master to be recognized
+      pause:
+        seconds: 5
+
+    - name: Get new master node ID
+      shell: |
+        redis-cli -h 10.10.0.11 -p 6379 cluster nodes | \
+          grep "{{ hostvars[new_master]['cluster_ip'] }}:6379" | awk '{print $1}'
+      register: new_master_id
+
+    - name: Add new replica to cluster
+      shell: |
+        redis-cli --cluster add-node \
+          {{ hostvars[new_replica]['cluster_ip'] }}:6379 \
+          10.10.0.11:6379 \
+          --cluster-slave \
+          --cluster-master-id {{ new_master_id.stdout | trim }}
+      register: add_replica
+
+    - name: Show add replica result
+      debug:
+        msg: "{{ add_replica.stdout_lines }}"
+
+    - name: Wait for cluster to stabilize after adding replica
+      pause:
+        seconds: 10
+
+    - name: Wait for cluster state to be ok
+      shell: redis-cli -h 10.10.0.11 -p 6379 cluster info | grep cluster_state
+      register: cluster_state
+      until: "'cluster_state:ok' in cluster_state.stdout"
+      retries: 15
+      delay: 5
+
+    - name: Rebalance slots across all masters
+      shell: |
+        redis-cli --cluster rebalance 10.10.0.11:6379 --cluster-use-empty-masters
+      register: rebalance
+
+    - name: Show rebalance result
+      debug:
+        msg: "{{ rebalance.stdout_lines }}"
+
+    - name: Verify cluster state after scale out
+      shell: redis-cli -h 10.10.0.11 -p 6379 cluster info | grep cluster_state
+      register: state
+      failed_when: "'cluster_state:ok' not in state.stdout"
+
+    - name: Show final cluster state
+      debug:
+        msg: "Scale out complete — cluster: ok"

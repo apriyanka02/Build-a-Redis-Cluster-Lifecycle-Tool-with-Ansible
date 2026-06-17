@@ -1,0 +1,74 @@
+---
+- name: Check if Redis is already installed
+  stat:
+    path: "{{ redis_install_dir }}/redis-server"
+  register: redis_binary
+
+- name: Download Redis source
+  get_url:
+    url: "http://download.redis.io/releases/redis-{{ redis_version }}.tar.gz"
+    dest: "/tmp/redis-{{ redis_version }}.tar.gz"
+    timeout: 120
+  when: not redis_binary.stat.exists
+
+- name: Extract Redis source
+  unarchive:
+    src: "/tmp/redis-{{ redis_version }}.tar.gz"
+    dest: "/tmp"
+    remote_src: yes
+  when: not redis_binary.stat.exists
+
+- name: Build Redis from source
+  shell: make -j$(nproc)
+  args:
+    chdir: "/tmp/redis-{{ redis_version }}"
+  when: not redis_binary.stat.exists
+
+- name: Install Redis binaries
+  shell: make install
+  args:
+    chdir: "/tmp/redis-{{ redis_version }}"
+  when: not redis_binary.stat.exists
+  become: yes
+
+- name: Create redis directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ redis_config_dir }}"
+    - "{{ redis_data_dir }}"
+    - /var/log/redis
+  become: yes
+
+- name: Deploy redis.conf
+  template:
+    src: redis.conf.j2
+    dest: "{{ redis_config_dir }}/redis.conf"
+  become: yes
+
+- name: Stop any existing Redis instance
+  shell: "{{ redis_install_dir }}/redis-cli -p {{ redis_port }} shutdown nosave || true"
+  become: yes
+  changed_when: false
+  ignore_errors: yes
+
+- name: Wait for Redis port to be free
+  wait_for:
+    host: "{{ cluster_ip }}"
+    port: "{{ redis_port }}"
+    state: absent
+    timeout: 10
+  ignore_errors: yes
+
+- name: Start Redis server
+  shell: "nohup {{ redis_install_dir }}/redis-server {{ redis_config_dir }}/redis.conf > /var/log/redis/startup.log 2>&1 &"
+  become: yes
+
+- name: Wait for Redis to be ready
+  wait_for:
+    host: "{{ cluster_ip }}"
+    port: "{{ redis_port }}"
+    timeout: 30
+    state: started

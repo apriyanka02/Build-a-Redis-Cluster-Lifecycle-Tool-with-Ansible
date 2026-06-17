@@ -1,0 +1,37 @@
+---
+- name: Verify data integrity in Redis Cluster
+  hosts: redis-node-1
+  become: yes
+  vars:
+    total_keys: "{{ num_keys | default(1000) }}"
+  tasks:
+    - name: Verify all keys
+      shell: |
+        passed=0
+        failed=0
+        missing=0
+        for i in $(seq -w 1 {{ total_keys }}); do
+          key="key:${i}"
+          expected=$(echo -n "${key}" | sha256sum | cut -d' ' -f1)
+          actual=$(/usr/local/bin/redis-cli -c -h 10.10.0.11 -p 6379 GET "${key}")
+          if [ -z "$actual" ]; then
+            missing=$((missing + 1))
+          elif [ "$actual" = "$expected" ]; then
+            passed=$((passed + 1))
+          else
+            failed=$((failed + 1))
+          fi
+        done
+        echo "PASSED: $passed"
+        echo "FAILED: $failed"
+        echo "MISSING: $missing"
+        if [ $failed -eq 0 ] && [ $missing -eq 0 ]; then
+          echo "RESULT: PASS — ${passed}/{{ total_keys }} keys verified"
+        else
+          echo "RESULT: FAIL — ${missing} keys missing, ${failed} values mismatched"
+        fi
+      register: verify_result
+
+    - name: Show verification result
+      debug:
+        msg: "{{ verify_result.stdout_lines }}"

@@ -1,0 +1,345 @@
+✓ Docker 29.5.3 found
+✓ Ansible 2.20.1 found
+Proceeding...
+
+Starting rolling upgrade to Redis 7.2.6...
+[WARNING]: Found variable using reserved name 'strategy'.
+Origin: <CLI option '-e'>
+
+strategy
+
+
+PLAY [Pre-flight checks] *******************************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+
+TASK [Check cluster is healthy] ************************************************
+changed: [redis-node-1]
+
+TASK [Pre-upgrade data verify] *************************************************
+changed: [redis-node-1]
+
+TASK [Show pre-upgrade verify] *************************************************
+ok: [redis-node-1] => {
+    "msg": [
+        "Pre-upgrade verify: PASS 1000/1000"
+    ]
+}
+
+PLAY [Upgrade replica redis-node-4] ********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-4]
+
+TASK [Stop Redis] **************************************************************
+changed: [redis-node-4]
+
+TASK [Wait for port to close] **************************************************
+ok: [redis-node-4]
+
+TASK [Download Redis 7.2.6] ****************************************************
+changed: [redis-node-4]
+
+TASK [Extract Redis] ***********************************************************
+changed: [redis-node-4]
+
+TASK [Compile Redis] ***********************************************************
+changed: [redis-node-4]
+
+TASK [Install Redis] ***********************************************************
+changed: [redis-node-4]
+
+TASK [Start Redis] *************************************************************
+changed: [redis-node-4]
+
+TASK [Wait for Redis ready] ****************************************************
+ok: [redis-node-4]
+
+TASK [Wait for replica sync] ***************************************************
+changed: [redis-node-4]
+
+PLAY [Verify cluster after node-4] *********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+
+TASK [Check cluster ok] ********************************************************
+changed: [redis-node-1]
+
+TASK [debug] *******************************************************************
+ok: [redis-node-1] => {
+    "msg": "[1/6] Upgraded replica 10.10.0.14 — cluster: ok"
+}
+
+PLAY [Upgrade replica redis-node-5] ********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-5]
+
+TASK [Stop Redis] **************************************************************
+changed: [redis-node-5]
+
+TASK [Wait for port to close] **************************************************
+ok: [redis-node-5]
+
+TASK [Download Redis 7.2.6] ****************************************************
+changed: [redis-node-5]
+
+TASK [Extract Redis] ***********************************************************
+changed: [redis-node-5]
+
+TASK [Compile Redis] ***********************************************************
+changed: [redis-node-5]
+
+TASK [Install Redis] ***********************************************************
+changed: [redis-node-5]
+
+TASK [Start Redis] *************************************************************
+changed: [redis-node-5]
+
+TASK [Wait for Redis ready] ****************************************************
+ok: [redis-node-5]
+
+TASK [Wait for replica sync] ***************************************************
+changed: [redis-node-5]
+
+PLAY [Verify cluster after node-5] *********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+
+TASK [Check cluster ok] ********************************************************
+changed: [redis-node-1]
+
+TASK [debug] *******************************************************************
+ok: [redis-node-1] => {
+    "msg": "[2/6] Upgraded replica 10.10.0.15 — cluster: ok"
+}
+
+PLAY [Upgrade replica redis-node-6] ********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-6]
+
+TASK [Stop Redis] **************************************************************
+changed: [redis-node-6]
+
+TASK [Wait for port to close] **************************************************
+ok: [redis-node-6]
+
+TASK [Download Redis 7.2.6] ****************************************************
+changed: [redis-node-6]
+
+TASK [Extract Redis] ***********************************************************
+changed: [redis-node-6]
+
+TASK [Compile Redis] ***********************************************************
+changed: [redis-node-6]
+
+TASK [Install Redis] ***********************************************************
+changed: [redis-node-6]
+
+TASK [Start Redis] *************************************************************
+changed: [redis-node-6]
+
+TASK [Wait for Redis ready] ****************************************************
+ok: [redis-node-6]
+
+TASK [Wait for replica sync] ***************************************************
+changed: [redis-node-6]
+
+PLAY [Verify cluster after node-6] *********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+
+TASK [Check cluster ok] ********************************************************
+changed: [redis-node-1]
+
+TASK [debug] *******************************************************************
+ok: [redis-node-1] => {
+    "msg": "[3/6] Upgraded replica 10.10.0.16 — cluster: ok"
+}
+
+PLAY [Upgrade master redis-node-1] *********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+
+TASK [Get replica of node-1] ***************************************************
+changed: [redis-node-1]
+
+TASK [Trigger failover] ********************************************************
+changed: [redis-node-1]
+
+TASK [Wait for node-1 to become replica] ***************************************
+changed: [redis-node-1]
+
+TASK [Stop Redis on node-1] ****************************************************
+changed: [redis-node-1]
+
+TASK [Wait for port to close] **************************************************
+ok: [redis-node-1]
+
+TASK [Download Redis 7.2.6] ****************************************************
+changed: [redis-node-1]
+
+TASK [Extract Redis] ***********************************************************
+changed: [redis-node-1]
+
+TASK [Compile Redis] ***********************************************************
+changed: [redis-node-1]
+
+TASK [Install Redis] ***********************************************************
+changed: [redis-node-1]
+
+TASK [Start Redis] *************************************************************
+changed: [redis-node-1]
+
+TASK [Wait for Redis ready] ****************************************************
+ok: [redis-node-1]
+
+PLAY [Verify cluster after master node-1] **************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-2]
+
+TASK [Check cluster ok] ********************************************************
+changed: [redis-node-2]
+
+TASK [debug] *******************************************************************
+ok: [redis-node-2] => {
+    "msg": "[4/6] Upgraded master 10.10.0.11 — cluster: ok"
+}
+
+PLAY [Upgrade master redis-node-2] *********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-2]
+
+TASK [Get replica of node-2] ***************************************************
+changed: [redis-node-2]
+
+TASK [Trigger failover] ********************************************************
+changed: [redis-node-2]
+
+TASK [Wait for node-2 to become replica] ***************************************
+changed: [redis-node-2]
+
+TASK [Stop Redis on node-2] ****************************************************
+changed: [redis-node-2]
+
+TASK [Wait for port to close] **************************************************
+ok: [redis-node-2]
+
+TASK [Download Redis 7.2.6] ****************************************************
+changed: [redis-node-2]
+
+TASK [Extract Redis] ***********************************************************
+changed: [redis-node-2]
+
+TASK [Compile Redis] ***********************************************************
+changed: [redis-node-2]
+
+TASK [Install Redis] ***********************************************************
+changed: [redis-node-2]
+
+TASK [Start Redis] *************************************************************
+changed: [redis-node-2]
+
+TASK [Wait for Redis ready] ****************************************************
+ok: [redis-node-2]
+
+PLAY [Verify cluster after master node-2] **************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-3]
+
+TASK [Check cluster ok] ********************************************************
+changed: [redis-node-3]
+
+TASK [debug] *******************************************************************
+ok: [redis-node-3] => {
+    "msg": "[5/6] Upgraded master 10.10.0.12 — cluster: ok"
+}
+
+PLAY [Upgrade master redis-node-3] *********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-3]
+
+TASK [Get replica of node-3] ***************************************************
+changed: [redis-node-3]
+
+TASK [Trigger failover] ********************************************************
+changed: [redis-node-3]
+
+TASK [Wait for node-3 to become replica] ***************************************
+changed: [redis-node-3]
+
+TASK [Stop Redis on node-3] ****************************************************
+changed: [redis-node-3]
+
+TASK [Wait for port to close] **************************************************
+ok: [redis-node-3]
+
+TASK [Download Redis 7.2.6] ****************************************************
+changed: [redis-node-3]
+
+TASK [Extract Redis] ***********************************************************
+changed: [redis-node-3]
+
+TASK [Compile Redis] ***********************************************************
+changed: [redis-node-3]
+
+TASK [Install Redis] ***********************************************************
+changed: [redis-node-3]
+
+TASK [Start Redis] *************************************************************
+changed: [redis-node-3]
+
+TASK [Wait for Redis ready] ****************************************************
+ok: [redis-node-3]
+
+PLAY [Post-upgrade verification] ***********************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [redis-node-1]
+
+TASK [Check cluster ok] ********************************************************
+changed: [redis-node-1]
+
+TASK [Verify data integrity] ***************************************************
+changed: [redis-node-1]
+
+TASK [Check all nodes version] *************************************************
+changed: [redis-node-1]
+
+TASK [Show results] ************************************************************
+ok: [redis-node-1] => {
+    "msg": [
+        "PASSED=1000 FAILED=0 MISSING=0",
+        "RESULT: PASS — 1000/1000 keys verified",
+        "10.10.0.11: v7.2.6",
+        "10.10.0.12: v7.2.6",
+        "10.10.0.13: v7.2.6",
+        "10.10.0.14: v7.2.6",
+        "10.10.0.15: v7.2.6",
+        "10.10.0.16: v7.2.6"
+    ]
+}
+
+TASK [UPGRADE COMPLETE] ********************************************************
+ok: [redis-node-1] => {
+    "msg": "UPGRADE COMPLETE — all nodes on v7.2.6, data integrity verified, cluster: ok"
+}
+
+PLAY RECAP *********************************************************************
+redis-node-1               : ok=31   changed=17   unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+redis-node-2               : ok=15   changed=10   unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+redis-node-3               : ok=15   changed=10   unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+redis-node-4               : ok=10   changed=7    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+redis-node-5               : ok=10   changed=7    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+redis-node-6               : ok=10   changed=7    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+

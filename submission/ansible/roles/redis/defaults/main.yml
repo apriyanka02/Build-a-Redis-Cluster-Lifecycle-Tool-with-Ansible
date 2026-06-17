@@ -1,0 +1,9 @@
+redis_version: "7.0.15"
+redis_port: 6379
+redis_bus_port: 16379
+redis_install_dir: /usr/local/bin
+redis_config_dir: /etc/redis
+redis_data_dir: /var/lib/redis
+redis_cluster_config_file: nodes.conf
+redis_node_timeout: 5000
+cluster_ip: "{{ hostvars[inventory_hostname]['cluster_ip'] | default(ansible_host) }}"

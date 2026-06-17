@@ -1,0 +1,67 @@
+---
+- name: Provision Redis on all nodes
+  hosts: redis_cluster
+  become: yes
+  roles:
+    - redis
+
+- name: Reset all nodes before forming cluster
+  hosts: redis_cluster
+  become: yes
+  tasks:
+    - name: Flush all data
+      shell: redis-cli -h {{ cluster_ip }} -p 6379 flushall || true
+      ignore_errors: yes
+
+    - name: Reset cluster state
+      shell: redis-cli -h {{ cluster_ip }} -p 6379 cluster reset hard || true
+      ignore_errors: yes
+
+    - name: Wait for reset
+      pause:
+        seconds: 2
+
+- name: Form Redis Cluster
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Wait for all Redis nodes to be ready
+      wait_for:
+        host: "{{ item }}"
+        port: 6379
+        timeout: 30
+      loop:
+        - 10.10.0.11
+        - 10.10.0.12
+        - 10.10.0.13
+        - 10.10.0.14
+        - 10.10.0.15
+        - 10.10.0.16
+
+    - name: Form Redis cluster
+      command: >
+        redis-cli --cluster create
+        10.10.0.11:6379
+        10.10.0.12:6379
+        10.10.0.13:6379
+        10.10.0.14:6379
+        10.10.0.15:6379
+        10.10.0.16:6379
+        --cluster-replicas 1
+        --cluster-yes
+      register: cluster_result
+
+    - name: Print cluster formation result
+      debug:
+        msg: "{{ cluster_result.stdout_lines }}"
+
+    - name: Wait for cluster state to become ok
+      shell: redis-cli -h 10.10.0.11 -p 6379 cluster info
+      register: cluster_info
+      until: "'cluster_state:ok' in cluster_info.stdout"
+      retries: 15
+      delay: 2
+
+    - name: Show cluster info
+      debug:
+        msg: "{{ cluster_info.stdout_lines }}"

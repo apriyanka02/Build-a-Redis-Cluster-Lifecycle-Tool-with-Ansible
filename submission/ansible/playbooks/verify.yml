@@ -1,0 +1,89 @@
+---
+- name: Full cluster verification
+  hosts: redis-node-1
+  become: yes
+  tasks:
+    - name: Check 1 - Data integrity
+      shell: |
+        passed=0; failed=0; missing=0
+        for i in $(seq -w 1 1000); do
+          key="key:${i}"
+          expected=$(echo -n "${key}" | sha256sum | cut -d' ' -f1)
+          actual=$(redis-cli -c -h 10.10.0.11 -p 6379 GET "${key}")
+          if [ -z "$actual" ]; then missing=$((missing+1))
+          elif [ "$actual" = "$expected" ]; then passed=$((passed+1))
+          else failed=$((failed+1))
+          fi
+        done
+        if [ $failed -eq 0 ] && [ $missing -eq 0 ]; then
+          echo "CHECK 1 - Data Integrity: PASS (${passed}/1000 keys verified)"
+        else
+          echo "CHECK 1 - Data Integrity: FAIL (missing=$missing failed=$failed)"
+        fi
+      register: check1
+
+    - name: Check 2 - Version consistency
+      shell: |
+        versions=$(for host in 10.10.0.11 10.10.0.12 10.10.0.13 10.10.0.14 10.10.0.15 10.10.0.16; do
+          redis-cli -h $host -p 6379 info server | grep redis_version | cut -d: -f2 | tr -d '[:space:]'
+        done | sort -u | wc -l)
+        if [ "$versions" = "1" ]; then
+          ver=$(redis-cli -h 10.10.0.11 -p 6379 info server | grep redis_version | cut -d: -f2 | tr -d '[:space:]')
+          echo "CHECK 2 - Version Consistency: PASS (all nodes on v$ver)"
+        else
+          echo "CHECK 2 - Version Consistency: FAIL (mixed versions detected)"
+        fi
+      register: check2
+
+    - name: Check 3 - Topology health
+      shell: |
+        slots=$(redis-cli cluster info | grep cluster_slots_assigned | cut -d: -f2 | tr -d '[:space:]')
+        masters=$(redis-cli cluster nodes | grep -c master)
+        replicas=$(redis-cli cluster nodes | grep -c slave)
+        if [ "$slots" = "16384" ] && [ "$masters" = "3" ] && [ "$replicas" = "3" ]; then
+          echo "CHECK 3 - Topology Health: PASS (slots=$slots masters=$masters replicas=$replicas)"
+        else
+          echo "CHECK 3 - Topology Health: FAIL (slots=$slots masters=$masters replicas=$replicas)"
+        fi
+      register: check3
+
+    - name: Check 4 - Cluster state
+      shell: |
+        state=$(redis-cli cluster info | grep cluster_state | cut -d: -f2 | tr -d '[:space:]')
+        if [ "$state" = "ok" ]; then
+          echo "CHECK 4 - Cluster State: PASS (cluster_state=ok)"
+        else
+          echo "CHECK 4 - Cluster State: FAIL (cluster_state=$state)"
+        fi
+      register: check4
+
+    - name: Check 5 - Replication lag
+      shell: |
+        failed=0
+        result=""
+        for host in 10.10.0.11 10.10.0.12 10.10.0.13 10.10.0.14 10.10.0.15 10.10.0.16; do
+          role=$(redis-cli -h $host -p 6379 info replication | grep ^role | cut -d: -f2 | tr -d '[:space:]')
+          if [ "$role" = "slave" ]; then
+            status=$(redis-cli -h $host -p 6379 info replication | grep master_link_status | cut -d: -f2 | tr -d '[:space:]\r')
+            if [ "$status" != "up" ]; then
+              failed=$((failed+1))
+            fi
+          fi
+        done
+        if [ $failed -eq 0 ]; then
+          echo "CHECK 5 - Replication Lag: PASS (all replicas master_link_status=up)"
+        else
+          echo "CHECK 5 - Replication Lag: FAIL ($failed replicas not synced)"
+        fi
+      register: check5
+
+    - name: Show full verification results
+      debug:
+        msg:
+          - "========== FULL VERIFICATION REPORT =========="
+          - "{{ check1.stdout }}"
+          - "{{ check2.stdout }}"
+          - "{{ check3.stdout }}"
+          - "{{ check4.stdout }}"
+          - "{{ check5.stdout }}"
+          - "=============================================="
