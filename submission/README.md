@@ -161,33 +161,32 @@ You'll see every "Download Redis source" / "Extract Redis source" / "Compile Red
 
 - **Scale out** — `./redis-tool scale --add-nodes 2` starts two new containers, provisions Redis on them, joins one as a master and one as its replica via `redis-cli --cluster add-node`, then rebalances slots across all masters.
 - **Scale in** — `./redis-tool scale --remove-node <node-id>` migrates slots off the target master, removes it and its replica from the cluster, and tears down their containers. Takes a Redis cluster node ID (from `status` / `cluster nodes`), not a container name.
+
+  Scale-in needs an extra node to remove, so the easiest way to exercise it is to scale out first and then immediately scale that new node back in:
+
+  1. Make sure the base 6-node cluster is already provisioned and healthy (`./redis-tool status`).
+  2. Scale out so you have a node to remove (`node-7` and `node-8`):
+     ```bash
+     ./redis-tool scale --add-nodes 2
+     ```
+  3. Confirm `node-7` joined the cluster and get its node ID:
+     ```bash
+     docker exec redis-node-1 redis-cli -h 10.10.0.11 -p 6379 cluster nodes | grep "10.10.0.17"
+     ```
+     Copy the first column — that's the node ID.
+  4. Test scale in with that node ID:
+     ```bash
+     ./redis-tool scale --remove-node <node-id-from-above>
+     ```
+  5. Verify it's gone and the cluster is healthy:
+     ```bash
+     docker exec redis-node-1 redis-cli -h 10.10.0.11 -p 6379 cluster nodes
+     docker exec redis-node-1 redis-cli -h 10.10.0.11 -p 6379 cluster info | grep cluster_state
+     ```
+     You should see only the original 6 nodes and `cluster_state:ok`. If there's no "Node is not empty" error and the deletion completes cleanly, scale-in is working as expected.
+
 - **Rollback** — `./redis-tool rollback --target-version 7.0.15` stops the cluster, wipes data and cluster state files on every node, reinstalls the target version, and re-forms the cluster from scratch. It's a fast path back to a known-good binary version, not a data-preserving undo of the upgrade.
-- **Structured logging** — every command appends a JSON line (timestamp, command, status, message) to `logs/<command>_<date>.log`.
-
-### Testing scale in
-
-Scale-in needs an extra node to remove, so the easiest way to exercise it is to scale out first and then immediately scale that new node back in:
-
-1. Make sure the base 6-node cluster is already provisioned and healthy (`./redis-tool status`).
-2. Scale out so you have a node to remove (`node-7` and `node-8`):
-   ```bash
-   ./redis-tool scale --add-nodes 2
-   ```
-3. Confirm `node-7` joined the cluster and get its node ID:
-   ```bash
-   docker exec redis-node-1 redis-cli -h 10.10.0.11 -p 6379 cluster nodes | grep "10.10.0.17"
-   ```
-   Copy the first column — that's the node ID.
-4. Test scale in with that node ID:
-   ```bash
-   ./redis-tool scale --remove-node <node-id-from-above>
-   ```
-5. Verify it's gone and the cluster is healthy:
-   ```bash
-   docker exec redis-node-1 redis-cli -h 10.10.0.11 -p 6379 cluster nodes
-   docker exec redis-node-1 redis-cli -h 10.10.0.11 -p 6379 cluster info | grep cluster_state
-   ```
-   You should see only the original 6 nodes and `cluster_state:ok`. If there's no "Node is not empty" error and the deletion completes cleanly, scale-in is working as expected.
+- **Structured logging** — every command appends a JSON line (timestamp, command, status, message) to `logs/<command>_<date>.log`. For an example of inspecting these logs in practice, see the Idempotency section above.
 
 ## Assumptions & Trade-offs
 
